@@ -4,22 +4,26 @@ const rp = require('request-promise');
 
 const month = 9;
 const year = 2019;
-const funds = [
-    { ticker: 'alzr11', qty: 10 },
-    { ticker: 'ggrc11', qty: 10 }
-];
+const funds = require('./funds.json');
 
 
 function main() {
+    const priceGetters = funds.map(fund => getPrice(fund.ticker));
+    const allPriceGetters = Promise.all(priceGetters);
     const dividendGetters = funds.map(fund => getTotalDividend(fund, year, month));
-    Promise.all(dividendGetters)
-        .then(dividends => {
-            console.log(`FII\tQTY\tDIVIDENDS`);
+    const allDividendGetters = Promise.all(dividendGetters);
+
+    Promise.all([allPriceGetters, allDividendGetters])
+        .then(([prices, dividends]) => {
+            console.log(`FII\tQTY\tPRICES\tYIELD\tDIVIDENDS`);
+            let total = 0;
             for (const [i, fund] of funds.entries()) {
-                console.log(`${fund.ticker}\t${fund.qty}\t${dividends[i].toFixed(2)}`);
+                const totalDividends = fund.qty * dividends[i];
+                const divYield = 100 * dividends[i] / prices[i];
+                console.log(`${fund.ticker}\t${fund.qty}\t${prices[i]}\t${divYield.toFixed(2)}%\t${totalDividends.toFixed(2)}`);
+                total += totalDividends;
             }
-            const total = dividends.reduce((acc, div) => acc + div).toFixed(2);
-            console.log(`TOTAL\t\t${total}`);
+            console.log(`TOTAL\t\t\t\t${total.toFixed(2)}`);
         });
 }
 
@@ -37,12 +41,11 @@ function getTotalDividend(fund, year, month) {
             // console.log(htmlString);
             const $ = cheerio.load(htmlString);
             const tableRows = $('#tabela tr');
-            const totalDivs = getDividend($, tableRows, year, month);
-            resolve(fund.qty * totalDivs);
+            resolve(getDividendFromTable($, tableRows, year, month));
         }));
 }
 
-function getDividend($, tableRows, year, month) {
+function getDividendFromTable($, tableRows, year, month) {
     const date = moment().year(year).month(month - 1).format('MM/YYYY');
 
     let ret;
@@ -50,11 +53,27 @@ function getDividend($, tableRows, year, month) {
         const children = $(row).children();
         const rowDate = $(children[0]).text();
         if (rowDate == date) {
-            const dividends = $(children[8]).text().replace(/,/g, '.');
-            ret = parseFloat(dividends, 10);
+            const dividends = $(children[8]).text();
+            ret = parseBrazilianNumber(dividends);
             return false;
         }
     });
 
     return ret;
+}
+
+function getPrice(ticker) {
+    const options = {
+        method: 'POST',
+        uri: 'https://www.clubefii.com.br/pega_cotacao',
+        form: { cod_neg: ticker }
+    };
+
+    return new Promise((resolve, reject) => rp(options).then(
+        payload => resolve(parseBrazilianNumber(payload.split(';')[0]))
+    ));
+}
+
+function parseBrazilianNumber(brNumber) {
+    return parseFloat(brNumber.replace(/,/g, '.'), 10);
 }
